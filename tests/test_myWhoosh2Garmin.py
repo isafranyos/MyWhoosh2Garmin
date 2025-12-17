@@ -67,7 +67,8 @@ class TestResetValues(unittest.TestCase):
     
     def test_reset_values(self):
         """Test resetting values returns three empty lists."""
-        cadence, power, heart_rate = mw2g.reset_values()
+        laps, cadence, power, heart_rate = mw2g.reset_values()
+        self.assertEqual(laps, [])
         self.assertEqual(cadence, [])
         self.assertEqual(power, [])
         self.assertEqual(heart_rate, [])
@@ -241,6 +242,150 @@ class TestCleanupFitFile(unittest.TestCase):
                                "avg_power should be calculated")
             self.assertIsNotNone(new_session.avg_heart_rate, 
                                "avg_heart_rate should be calculated")
+            
+            mock_built_file.to_file.assert_called_once()
+        finally:
+            # Restore originals
+            mw2g.FitFileBuilder = original_builder
+            mw2g.FitFile = original_fit
+            mw2g.RecordTemperatureField = original_temp
+            mw2g.LapMessage = original_lap
+            mw2g.SessionMessage = original_session
+            mw2g.RecordMessage = original_record
+    
+    @patch('myWhoosh2Garmin.FitFileBuilder')
+    @patch('myWhoosh2Garmin.FitFile')
+    @patch('myWhoosh2Garmin.RecordTemperatureField')
+    def test_cleanup_fit_file_processes_lap_message(
+        self, mock_temp_field, mock_fit_file, mock_builder
+    ):
+        """Test that LapMessage data is collected and processed."""
+        # Setup mocks
+        mock_temp_field.ID = 13
+        
+        # Create proper type classes for isinstance checks
+        MockRecordMessage = type('RecordMessage', (), {})
+        MockSessionMessage = type('SessionMessage', (), {})
+        MockLapMessage = type('LapMessage', (), {})
+        
+        # Create mock lap message with various fields
+        lap = Mock(spec=MockLapMessage)
+        lap.start_time = 1000
+        lap.total_elapsed_time = 900.0
+        lap.total_distance = 5000.0
+        lap.avg_speed = 5.5
+        lap.max_speed = 8.0
+        lap.avg_heart_rate = 150
+        lap.max_heart_rate = 165
+        lap.avg_cadence = 90
+        lap.max_cadence = 100
+        lap.total_calories = 200
+        lap.__class__ = MockLapMessage
+        
+        # Create mock record message
+        record = Mock(spec=MockRecordMessage)
+        record.cadence = 85
+        record.power = 200
+        record.heart_rate = 145
+        record.remove_field = Mock()
+        record.__class__ = MockRecordMessage
+        
+        # Create mock session message
+        session = Mock(spec=MockSessionMessage)
+        session.avg_cadence = None
+        session.avg_power = None
+        session.avg_heart_rate = None
+        session.__class__ = MockSessionMessage
+        
+        # Setup FitFile mock - lap comes before session
+        mock_fit_instance = Mock()
+        mock_fit_instance.records = [
+            Mock(message=lap),
+            Mock(message=record),
+            Mock(message=session),
+        ]
+        mock_fit_file.from_file.return_value = mock_fit_instance
+        
+        # Setup builder mock
+        mock_builder_instance = Mock()
+        mock_builder.return_value = mock_builder_instance
+        mock_built_file = Mock()
+        mock_builder_instance.build.return_value = mock_built_file
+        
+        # Track what gets added to the builder
+        added_messages = []
+        def capture_add(msg):
+            added_messages.append(msg)
+            return None
+        
+        mock_builder_instance.add.side_effect = capture_add
+        
+        # Temporarily replace with mocks
+        original_builder = mw2g.FitFileBuilder
+        original_fit = mw2g.FitFile
+        original_temp = mw2g.RecordTemperatureField
+        original_lap = mw2g.LapMessage
+        original_session = mw2g.SessionMessage
+        original_record = mw2g.RecordMessage
+        
+        try:
+            mw2g.FitFileBuilder = mock_builder
+            mw2g.FitFile = mock_fit_file
+            mw2g.RecordTemperatureField = mock_temp_field
+            mw2g.LapMessage = MockLapMessage
+            mw2g.SessionMessage = MockSessionMessage
+            mw2g.RecordMessage = MockRecordMessage
+            
+            # Mock append_value to track what values are collected from lap
+            original_append_value = mw2g.append_value
+            lap_value_calls = []
+            def track_append_value(values, message, field_name):
+                if isinstance(message, MockLapMessage):
+                    lap_value_calls.append((field_name, getattr(message, field_name, None)))
+                return original_append_value(values, message, field_name)
+            
+            mw2g.append_value = track_append_value
+            
+            # Run the function
+            mw2g.cleanup_fit_file(self.input_file, self.output_file)
+            
+            # Restore append_value
+            mw2g.append_value = original_append_value
+            
+            # Verify lap message values were collected
+            # The function should collect: start_time, total_elapsed_time, total_distance,
+            # avg_speed, max_speed, avg_heart_rate, max_heart_rate, avg_cadence, 
+            # max_cadence, total_calories
+            expected_lap_fields = [
+                "start_time", "total_elapsed_time", "total_distance",
+                "avg_speed", "max_speed", "avg_heart_rate", "max_heart_rate",
+                "avg_cadence", "max_cadence", "total_calories"
+            ]
+            collected_fields = [field for field, _ in lap_value_calls]
+            for field in expected_lap_fields:
+                self.assertIn(field, collected_fields,
+                            f"LapMessage field '{field}' should be collected")
+            
+            # Verify lap message was added to builder (via default case)
+            lap_messages = [msg for msg in added_messages 
+                          if isinstance(msg, MockLapMessage)]
+            self.assertEqual(len(lap_messages), 1, 
+                           "LapMessage should be added to builder")
+            self.assertEqual(lap_messages[0], lap,
+                           "The original lap message should be added")
+            
+            # Verify record message was processed
+            self.assertEqual(record.remove_field.call_count, 1)
+            
+            # Verify session message was created with averages
+            session_messages = [msg for msg in added_messages 
+                              if isinstance(msg, MockSessionMessage)]
+            self.assertEqual(len(session_messages), 1,
+                           "SessionMessage should be added to builder")
+            
+            # Verify all messages were added (lap + record + session = 3)
+            self.assertEqual(len(added_messages), 3,
+                           "Should have lap, record, and session messages")
             
             mock_built_file.to_file.assert_called_once()
         finally:

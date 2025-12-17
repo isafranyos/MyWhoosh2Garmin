@@ -379,7 +379,7 @@ def append_value(values: List[int], message: object, field_name: str) -> None:
     values.append(value if value else 0)
 
 
-def reset_values() -> Tuple[List[int], List[int], List[int]]:
+def reset_values() -> Tuple[List[int], List[int], List[int], List[int]]:
     """
     Resets and returns three empty lists for cadence, power 
     and heart rate values.
@@ -388,13 +388,13 @@ def reset_values() -> Tuple[List[int], List[int], List[int]]:
         A tuple containing three empty lists 
         (cadence, power, and heart rate).
     """
-    return [], [], []
+    return [], [], [], []
 
 
 def cleanup_fit_file(fit_file_path: Path, new_file_path: Path) -> None:
     builder = FitFileBuilder(auto_define=True)  # helps when re-emitting messages
     fit_file = FitFile.from_file(str(fit_file_path))
-    cadence_values, power_values, heart_rate_values = reset_values()
+    lap_values, cadence_values, power_values, heart_rate_values = reset_values()
 
     # fields you likely want to preserve from the original session
     SESSION_COPY_FIELDS = [
@@ -419,7 +419,16 @@ def cleanup_fit_file(fit_file_path: Path, new_file_path: Path) -> None:
         message = record.message
 
         if isinstance(message, LapMessage):
-            continue
+            append_value(lap_values, message, "start_time")
+            append_value(lap_values, message, "total_elapsed_time")
+            append_value(lap_values, message, "total_distance")
+            append_value(lap_values, message, "avg_speed")
+            append_value(lap_values, message, "max_speed")
+            append_value(lap_values, message, "avg_heart_rate")
+            append_value(lap_values, message, "max_heart_rate")
+            append_value(lap_values, message, "avg_cadence")
+            append_value(lap_values, message, "max_cadence")
+            append_value(lap_values, message, "total_calories")
 
         if isinstance(message, RecordMessage):
             message.remove_field(RecordTemperatureField.ID)
@@ -454,7 +463,7 @@ def cleanup_fit_file(fit_file_path: Path, new_file_path: Path) -> None:
             else:
                 new_session.avg_heart_rate = message.avg_heart_rate
 
-            cadence_values, power_values, heart_rate_values = reset_values()
+            lap_values, cadence_values, power_values, heart_rate_values = reset_values()
 
             builder.add(new_session)
             continue
