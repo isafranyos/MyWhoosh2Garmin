@@ -15,8 +15,13 @@ import shutil
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Import test FIT generator
-from tests.generate_test_fit import create_test_fit_file
+# Import test FIT generator (handle import error gracefully)
+try:
+    from tests.generate_test_fit import create_test_fit_file
+    FIT_TOOL_AVAILABLE = True
+except (ImportError, SystemExit):
+    FIT_TOOL_AVAILABLE = False
+    create_test_fit_file = None
 
 # Import the module under test
 import myWhoosh2Garmin as mw2g
@@ -27,6 +32,9 @@ class TestFITFileProcessingIntegration(unittest.TestCase):
     
     def setUp(self):
         """Set up test environment with real FIT file."""
+        if not FIT_TOOL_AVAILABLE or create_test_fit_file is None:
+            self.skipTest("fit_tool not available")
+        
         self.test_dir = Path(tempfile.mkdtemp())
         self.input_file = self.test_dir / "MyNewActivity-3.8.5.fit"
         self.output_file = self.test_dir / "cleaned.fit"
@@ -122,6 +130,9 @@ class TestFullWorkflowWithMocks(unittest.TestCase):
         self.backup_location.mkdir()
         
         # Create a test FIT file
+        if not FIT_TOOL_AVAILABLE or create_test_fit_file is None:
+            self.skipTest("fit_tool not available")
+        
         self.test_fit = self.fitfile_location / "MyNewActivity-3.8.5.fit"
         try:
             create_test_fit_file(self.test_fit)

@@ -169,7 +169,7 @@ def import_required_modules() -> bool:
     """
     global garth, GarthException, GarthHTTPError, FitFile, FitFileBuilder
     global FileCreatorMessage, RecordMessage, RecordTemperatureField
-    global SessionMessage, LapMessage
+    global SessionMessage, LapMmessage
     
     try:
         import garth

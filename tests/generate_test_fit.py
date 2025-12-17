@@ -19,9 +19,13 @@ try:
     from fit_tool.profile.messages.file_creator_message import FileCreatorMessage
     from fit_tool.profile.messages.record_message import RecordTemperatureField
 except ImportError as e:
-    print(f"Error importing fit_tool: {e}")
-    print("Please install fit_tool: pip install fit_tool")
-    sys.exit(1)
+    # Don't exit if imported as a module (for testing)
+    if __name__ == "__main__":
+        print(f"Error importing fit_tool: {e}")
+        print("Please install fit_tool: pip install fit_tool")
+        sys.exit(1)
+    else:
+        raise
 
 
 def create_test_fit_file(output_path: Path) -> None:

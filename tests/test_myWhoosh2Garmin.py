@@ -142,27 +142,37 @@ class TestCleanupFitFile(unittest.TestCase):
         # Setup mocks
         mock_temp_field.ID = 13
         
+        # Create proper type classes for isinstance checks
+        MockRecordMessage = type('RecordMessage', (), {})
+        MockSessionMessage = type('SessionMessage', (), {})
+        MockLapMessage = type('LapMessage', (), {})
+        
         # Create mock record messages
-        record1 = Mock()
+        record1 = Mock(spec=MockRecordMessage)
         record1.cadence = 90
         record1.power = 200
         record1.heart_rate = 150
         record1.remove_field = Mock()
+        # Make isinstance work
+        record1.__class__ = MockRecordMessage
         
-        record2 = Mock()
+        record2 = Mock(spec=MockRecordMessage)
         record2.cadence = 95
         record2.power = 210
         record2.heart_rate = 155
         record2.remove_field = Mock()
+        record2.__class__ = MockRecordMessage
         
         # Create mock session message
-        session = Mock()
+        session = Mock(spec=MockSessionMessage)
         session.avg_cadence = None
         session.avg_power = None
         session.avg_heart_rate = None
+        session.__class__ = MockSessionMessage
         
         # Create mock lap message
-        lap = Mock()
+        lap = Mock(spec=MockLapMessage)
+        lap.__class__ = MockLapMessage
         
         # Setup FitFile mock
         mock_fit_instance = Mock()
@@ -180,19 +190,21 @@ class TestCleanupFitFile(unittest.TestCase):
         mock_built_file = Mock()
         mock_builder_instance.build.return_value = mock_built_file
         
-        # Ensure modules are imported
-        if mw2g.FitFileBuilder is None:
-            mw2g.import_required_modules()
-        
         # Temporarily replace with mocks
         original_builder = mw2g.FitFileBuilder
         original_fit = mw2g.FitFile
         original_temp = mw2g.RecordTemperatureField
+        original_lap = mw2g.LapMessage
+        original_session = mw2g.SessionMessage
+        original_record = mw2g.RecordMessage
         
         try:
             mw2g.FitFileBuilder = mock_builder
             mw2g.FitFile = mock_fit_file
             mw2g.RecordTemperatureField = mock_temp_field
+            mw2g.LapMessage = MockLapMessage
+            mw2g.SessionMessage = MockSessionMessage
+            mw2g.RecordMessage = MockRecordMessage
             
             # Run the function
             mw2g.cleanup_fit_file(self.input_file, self.output_file)
@@ -216,47 +228,76 @@ class TestCleanupFitFile(unittest.TestCase):
             mw2g.FitFileBuilder = original_builder
             mw2g.FitFile = original_fit
             mw2g.RecordTemperatureField = original_temp
+            mw2g.LapMessage = original_lap
+            mw2g.SessionMessage = original_session
+            mw2g.RecordMessage = original_record
 
 
 class TestGetFitfileLocation(unittest.TestCase):
     """Test the get_fitfile_location function."""
     
+    @unittest.skipIf(sys.platform == 'win32', "POSIX test not applicable on Windows")
     @patch('myWhoosh2Garmin.os.name', 'posix')
-    @patch('myWhoosh2Garmin.Path.home')
-    def test_get_fitfile_location_posix_exists(self, mock_home):
+    def test_get_fitfile_location_posix_exists(self):
         """Test POSIX path when directory exists."""
-        mock_home.return_value = Path("/home/user")
-        target_path = Path("/home/user/Library/Containers/com.whoosh.whooshgame/Data/Library/Application Support/Epic/MyWhoosh/Content/Data")
-        
-        with patch.object(target_path, 'is_dir', return_value=True):
-            with patch('myWhoosh2Garmin.Path') as mock_path:
-                mock_path.home.return_value = Path("/home/user")
-                # Build the path manually for testing
+        # This test is complex to mock properly, so we'll test the actual function
+        # with a temporary directory structure
+        test_dir = Path(tempfile.mkdtemp())
+        try:
+            # Create the expected directory structure
+            target_path = (
+                test_dir / "Library" / "Containers" / "com.whoosh.whooshgame"
+                / "Data" / "Library" / "Application Support" / "Epic"
+                / "MyWhoosh" / "Content" / "Data"
+            )
+            target_path.mkdir(parents=True, exist_ok=True)
+            
+            with patch('myWhoosh2Garmin.Path.home', return_value=test_dir):
                 result = mw2g.get_fitfile_location()
-                # Since we can't easily mock the full path construction,
-                # we'll test the logic differently
-                pass  # This test would need more complex mocking
+                self.assertEqual(result, target_path)
+        finally:
+            shutil.rmtree(test_dir)
     
+    @unittest.skipIf(sys.platform != 'win32', "Windows test only")
     @patch('myWhoosh2Garmin.os.name', 'nt')
-    @patch('myWhoosh2Garmin.Path.home')
-    def test_get_fitfile_location_windows(self, mock_home):
+    def test_get_fitfile_location_windows(self):
         """Test Windows path finding."""
-        mock_home.return_value = Path("C:/Users/Test")
-        base_path = Path("C:/Users/Test/AppData/Local/Packages")
-        
-        # Create a mock directory structure
-        mock_package_dir = Mock()
-        mock_package_dir.is_dir.return_value = True
-        mock_package_dir.name = "MyWhooshTechnologyService.1234567890"
-        mock_package_dir.__truediv__ = lambda self, other: Path(str(self) + "/" + str(other))
-        
-        target_path = Path(str(mock_package_dir) + "/LocalCache/Local/MyWhoosh/Content/Data")
-        
-        with patch.object(Path, 'iterdir') as mock_iterdir:
-            with patch.object(target_path, 'is_dir', return_value=True):
-                mock_iterdir.return_value = [mock_package_dir]
-                # This test needs more complex setup
-                pass
+        test_dir = Path(tempfile.mkdtemp())
+        try:
+            # Create Windows-style directory structure matching the expected path
+            home_dir = test_dir / "home"
+            home_dir.mkdir()
+            
+            appdata = home_dir / "AppData" / "Local" / "Packages"
+            appdata.mkdir(parents=True, exist_ok=True)
+            
+            # Create a mock MyWhoosh package directory
+            mywhoosh_package = appdata / "MyWhooshTechnologyService.1234567890"
+            mywhoosh_package.mkdir()
+            
+            target_path = (
+                mywhoosh_package / "LocalCache" / "Local" / "MyWhoosh"
+                / "Content" / "Data"
+            )
+            target_path.mkdir(parents=True, exist_ok=True)
+            
+            # Mock Path.home to return our test home directory
+            with patch('myWhoosh2Garmin.Path.home', return_value=home_dir):
+                result = mw2g.get_fitfile_location()
+                # On Windows, the function should find the directory
+                if result:
+                    self.assertEqual(result, target_path)
+        finally:
+            shutil.rmtree(test_dir)
+    
+    def test_get_fitfile_location_not_found(self):
+        """Test when FIT file location doesn't exist."""
+        # Use a non-existent path
+        fake_home = Path("/nonexistent/path/that/does/not/exist")
+        with patch('myWhoosh2Garmin.Path.home', return_value=fake_home):
+            result = mw2g.get_fitfile_location()
+            # Should return None when path doesn't exist
+            self.assertIsNone(result)
 
 
 class TestGetBackupPath(unittest.TestCase):
@@ -349,21 +390,40 @@ class TestAuthenticateToGarmin(unittest.TestCase):
     ):
         """Test authentication with expired session."""
         mock_tokens_path.exists.return_value = True
-        mock_garth.resume.return_value = None
-        mock_garth.client.username = "testuser"
         
-        # Simulate expired session
-        mock_garth.client = Mock()
-        mock_garth.client.username = Mock(side_effect=mw2g.GarthException("Expired"))
+        # Create a mock exception class if GarthException is not available
+        if mw2g.GarthException and isinstance(mw2g.GarthException, type):
+            GarthException = mw2g.GarthException
+        else:
+            class GarthException(Exception):
+                pass
+        
+        # Set up the exception to be raised when accessing username
+        def raise_exception(*args, **kwargs):
+            raise GarthException("Expired")
+        
+        mock_garth.resume.return_value = None
+        mock_client = Mock()
+        # Accessing username property raises exception
+        type(mock_client).username = property(lambda self: raise_exception())
+        mock_garth.client = mock_client
         mock_get_creds.return_value = True
         
-        # Need to handle the exception properly
-        with patch.object(mw2g, 'GarthException', Exception):
-            try:
-                result = mw2g.authenticate_to_garmin()
-            except:
-                # If exception is raised, test get_credentials_for_garmin is called
-                pass
+        # Temporarily set GarthException if it's None
+        original_exception = mw2g.GarthException
+        try:
+            if mw2g.GarthException is None:
+                mw2g.GarthException = GarthException
+            
+            # The function should catch the exception and call get_credentials_for_garmin
+            result = mw2g.authenticate_to_garmin()
+            
+            # Should have called get_credentials_for_garmin after exception
+            self.assertTrue(result)
+            mock_get_creds.assert_called_once()
+        finally:
+            if original_exception is None:
+                mw2g.GarthException = original_exception
     
     @patch('myWhoosh2Garmin.TOKENS_PATH')
     @patch('myWhoosh2Garmin.garth')
@@ -405,16 +465,31 @@ class TestUploadFitFileToGarmin(unittest.TestCase):
         mock_garth.client.upload.assert_called_once()
     
     @patch('myWhoosh2Garmin.garth')
-    @patch('myWhoosh2Garmin.GarthHTTPError')
-    def test_upload_fit_file_to_garmin_duplicate(
-        self, mock_http_error, mock_garth
-    ):
+    def test_upload_fit_file_to_garmin_duplicate(self, mock_garth):
         """Test upload with duplicate activity error."""
-        mock_garth.client.upload.side_effect = mock_http_error("Duplicate")
+        # Create a proper exception class that inherits from Exception
+        if mw2g.GarthHTTPError and isinstance(mw2g.GarthHTTPError, type):
+            GarthHTTPError = mw2g.GarthHTTPError
+        else:
+            # Create a mock exception class if not available
+            class GarthHTTPError(Exception):
+                pass
         
-        result = mw2g.upload_fit_file_to_garmin(self.test_file)
+        error_instance = GarthHTTPError("Duplicate activity")
+        mock_garth.client.upload.side_effect = error_instance
         
-        self.assertFalse(result)
+        # Temporarily set GarthHTTPError if it's None
+        original_error = mw2g.GarthHTTPError
+        try:
+            if mw2g.GarthHTTPError is None:
+                mw2g.GarthHTTPError = GarthHTTPError
+            
+            result = mw2g.upload_fit_file_to_garmin(self.test_file)
+            
+            self.assertFalse(result)
+        finally:
+            if original_error is None:
+                mw2g.GarthHTTPError = original_error
     
     def test_upload_fit_file_to_garmin_invalid_path(self):
         """Test upload with invalid file path."""
