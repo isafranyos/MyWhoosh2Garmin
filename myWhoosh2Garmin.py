@@ -169,7 +169,7 @@ def import_required_modules() -> bool:
     """
     global garth, GarthException, GarthHTTPError, FitFile, FitFileBuilder
     global FileCreatorMessage, RecordMessage, RecordTemperatureField
-    global SessionMessage, LapMmessage
+    global SessionMessage, LapMessage
     
     try:
         import garth
@@ -392,41 +392,78 @@ def reset_values() -> Tuple[List[int], List[int], List[int]]:
 
 
 def cleanup_fit_file(fit_file_path: Path, new_file_path: Path) -> None:
-    """
-    Clean up the FIT file by processing and removing unnecessary fields.
-    Also, calculate average values for cadence, power, and heart rate.
-
-    Args:
-        fit_file_path: The path to the input FIT file.
-        new_file_path: The path to save the processed FIT file.
-
-    Raises:
-        IOError: If the file cannot be read or written.
-        ValueError: If the FIT file is invalid.
-    """
-    builder = FitFileBuilder()
+    builder = FitFileBuilder(auto_define=True)  # helps when re-emitting messages
     fit_file = FitFile.from_file(str(fit_file_path))
     cadence_values, power_values, heart_rate_values = reset_values()
 
+    # fields you likely want to preserve from the original session
+    SESSION_COPY_FIELDS = [
+        "message_index",
+        "timestamp",
+        "start_time",
+        "sport",
+        "sub_sport",
+        "event",
+        "event_type",
+        "first_lap_index",
+        "num_laps",
+        "total_elapsed_time",
+        "total_timer_time",
+        "total_distance",
+        "total_calories",
+        "avg_speed",
+        "max_speed",
+    ]
+
     for record in fit_file.records:
         message = record.message
+
         if isinstance(message, LapMessage):
             continue
+
         if isinstance(message, RecordMessage):
             message.remove_field(RecordTemperatureField.ID)
             append_value(cadence_values, message, "cadence")
             append_value(power_values, message, "power")
             append_value(heart_rate_values, message, "heart_rate")
+            builder.add(message)
+            continue
+
         if isinstance(message, SessionMessage):
-            if not message.avg_cadence:
-                message.avg_cadence = int(calculate_avg(cadence_values))
-            if not message.avg_power:
-                message.avg_power = int(calculate_avg(power_values))
-            if not message.avg_heart_rate:
-                message.avg_heart_rate = int(calculate_avg(heart_rate_values))
+            # Build a NEW SessionMessage so avg_* setters work
+            new_session = SessionMessage()
+
+            for name in SESSION_COPY_FIELDS:
+                val = getattr(message, name, None)
+                if val is not None:
+                    setattr(new_session, name, val)
+
+            # IMPORTANT: use "is None" checks so you don't clobber legit 0 values
+            if getattr(message, "avg_cadence", None) is None:
+                new_session.avg_cadence = int(calculate_avg(cadence_values))
+            else:
+                new_session.avg_cadence = message.avg_cadence
+
+            if getattr(message, "avg_power", None) is None:
+                new_session.avg_power = int(calculate_avg(power_values))
+            else:
+                new_session.avg_power = message.avg_power
+
+            if getattr(message, "avg_heart_rate", None) is None:
+                new_session.avg_heart_rate = int(calculate_avg(heart_rate_values))
+            else:
+                new_session.avg_heart_rate = message.avg_heart_rate
+
             cadence_values, power_values, heart_rate_values = reset_values()
+
+            builder.add(new_session)
+            continue
+
+        # default: pass other messages through unchanged
         builder.add(message)
+
     builder.build().to_file(str(new_file_path))
+
     logger.info(f"Cleaned-up file saved as {new_file_path}")
 
 

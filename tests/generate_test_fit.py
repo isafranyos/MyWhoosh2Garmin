@@ -5,7 +5,7 @@ This creates a minimal FIT file with record messages, session messages,
 and temperature data that can be used for testing.
 """
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import sys
 
 # Add parent directory to path to import fit_tool
@@ -15,6 +15,7 @@ try:
     from fit_tool.fit_file_builder import FitFileBuilder
     from fit_tool.profile.messages.record_message import RecordMessage
     from fit_tool.profile.messages.session_message import SessionMessage
+    from fit_tool.profile.profile_type import Sport
     from fit_tool.profile.messages.lap_message import LapMessage
     from fit_tool.profile.messages.file_creator_message import FileCreatorMessage
     from fit_tool.profile.messages.record_message import RecordTemperatureField
@@ -27,6 +28,13 @@ except ImportError as e:
     else:
         raise
 
+FIT_EPOCH = datetime(1989, 12, 31, 0, 0, 0, tzinfo=timezone.utc)
+
+def datetime_to_fit_timestamp(dt: datetime) -> int:
+    """Convert UTC datetime to FIT timestamp (uint32)."""
+    if dt.tzinfo is None:
+        raise ValueError("datetime must be timezone-aware (UTC)")
+    return int((dt - FIT_EPOCH).total_seconds())
 
 def create_test_fit_file(output_path: Path) -> None:
     """Create a test FIT file with sample data."""
@@ -37,16 +45,23 @@ def create_test_fit_file(output_path: Path) -> None:
     file_creator.software_version = 100
     builder.add(file_creator)
     
-    # Create start time
-    start_time = datetime.now() - timedelta(hours=1)
+    # ---- Start time (UTC!) ----
+    start_dt = datetime.now(timezone.utc) - timedelta(hours=1)
+    start_ts_ms = round(start_dt.timestamp() * 1000)
+    
+    # Log the timestamp for debugging
+    print("fit_epoch:", FIT_EPOCH, "tzinfo:", FIT_EPOCH.tzinfo)
+    print("start_ts_ms:", start_ts_ms)
     
     # Add record messages with varying data
     # Simulate a 30-minute ride with data points every 5 seconds
     num_records = 360  # 30 minutes * 60 seconds / 5 seconds
+
     
     for i in range(num_records):
         record = RecordMessage()
-        record.timestamp = start_time + timedelta(seconds=i * 5)
+        # Use FIT timestamp (seconds since 1989-12-31 00:00:00 UTC)
+        record.timestamp = start_ts_ms + i * 5000
         
         # Vary the values to create realistic averages
         # Power: 150-250 watts average
@@ -59,26 +74,27 @@ def create_test_fit_file(output_path: Path) -> None:
         record.cadence = 90 + int(10 * (i % 12 - 6) / 6)
         
         # Add temperature (this should be removed by cleanup)
-        record.set_field(RecordTemperatureField.ID, 20 + int(i % 5))
+        record.temperature = 20 + (i % 5)
         
         builder.add(record)
     
     # Add session message (without averages - they should be calculated)
     session = SessionMessage()
-    session.timestamp = start_time + timedelta(minutes=30)
-    session.start_time = start_time
+    session.timestamp = start_ts_ms + 1800*1000  # 30 minutes later
+    session.start_time = start_ts_ms
     session.total_elapsed_time = 1800.0  # 30 minutes in seconds
     session.total_timer_time = 1800.0
     session.total_distance = 15000.0  # 15 km
-    session.sport = "cycling"
+    session.sport = Sport.CYCLING 
     # Intentionally leave avg_power, avg_heart_rate, avg_cadence as None
     # to test the calculation logic
     builder.add(session)
-    
+
+
     # Add a lap message
     lap = LapMessage()
-    lap.timestamp = start_time + timedelta(minutes=15)
-    lap.start_time = start_time
+    lap.timestamp = start_ts_ms + 900*1000  # 15 minutes later
+    lap.start_time = start_ts_ms
     lap.total_elapsed_time = 900.0
     lap.total_timer_time = 900.0
     lap.total_distance = 7500.0

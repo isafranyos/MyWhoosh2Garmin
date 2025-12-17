@@ -206,6 +206,14 @@ class TestCleanupFitFile(unittest.TestCase):
             mw2g.SessionMessage = MockSessionMessage
             mw2g.RecordMessage = MockRecordMessage
             
+            # Track what gets added to the builder
+            added_messages = []
+            def capture_add(msg):
+                added_messages.append(msg)
+                return None
+            
+            mock_builder_instance.add.side_effect = capture_add
+            
             # Run the function
             mw2g.cleanup_fit_file(self.input_file, self.output_file)
             
@@ -215,13 +223,25 @@ class TestCleanupFitFile(unittest.TestCase):
             record1.remove_field.assert_called_with(mock_temp_field.ID)
             record2.remove_field.assert_called_with(mock_temp_field.ID)
             
-            # Verify averages were calculated
-            self.assertIsNotNone(session.avg_cadence)
-            self.assertIsNotNone(session.avg_power)
-            self.assertIsNotNone(session.avg_heart_rate)
-            
             # Verify builder was used correctly
-            self.assertGreaterEqual(mock_builder_instance.add.call_count, 3)
+            # Should have added: 2 records + 1 lap (skipped) + 1 session = 3 messages
+            self.assertGreaterEqual(len(added_messages), 3)
+            
+            # Find the session message that was added (the function creates a new one)
+            session_messages = [msg for msg in added_messages 
+                              if isinstance(msg, MockSessionMessage)]
+            
+            # Verify a session message was added with averages calculated
+            self.assertGreater(len(session_messages), 0, 
+                             "No SessionMessage was added to builder")
+            new_session = session_messages[0]
+            self.assertIsNotNone(new_session.avg_cadence, 
+                               "avg_cadence should be calculated")
+            self.assertIsNotNone(new_session.avg_power, 
+                               "avg_power should be calculated")
+            self.assertIsNotNone(new_session.avg_heart_rate, 
+                               "avg_heart_rate should be calculated")
+            
             mock_built_file.to_file.assert_called_once()
         finally:
             # Restore originals
@@ -468,27 +488,41 @@ class TestUploadFitFileToGarmin(unittest.TestCase):
     def test_upload_fit_file_to_garmin_duplicate(self, mock_garth):
         """Test upload with duplicate activity error."""
         # Create a proper exception class that inherits from Exception
+        # GarthHTTPError from garth.exc may require specific arguments
         if mw2g.GarthHTTPError and isinstance(mw2g.GarthHTTPError, type):
-            GarthHTTPError = mw2g.GarthHTTPError
+            # Try to create with error parameter if that's what it expects
+            try:
+                # GarthHTTPError might require an 'error' parameter
+                error_instance = mw2g.GarthHTTPError(error="Duplicate activity")
+            except TypeError:
+                # If that doesn't work, try with just a message
+                try:
+                    error_instance = mw2g.GarthHTTPError("Duplicate activity")
+                except TypeError:
+                    # If still fails, create a simple mock exception
+                    class MockGarthHTTPError(Exception):
+                        pass
+                    error_instance = MockGarthHTTPError("Duplicate activity")
+                    # Temporarily replace
+                    original_error = mw2g.GarthHTTPError
+                    mw2g.GarthHTTPError = MockGarthHTTPError
         else:
             # Create a mock exception class if not available
             class GarthHTTPError(Exception):
                 pass
+            error_instance = GarthHTTPError("Duplicate activity")
+            original_error = mw2g.GarthHTTPError
+            mw2g.GarthHTTPError = GarthHTTPError
         
-        error_instance = GarthHTTPError("Duplicate activity")
         mock_garth.client.upload.side_effect = error_instance
         
-        # Temporarily set GarthHTTPError if it's None
-        original_error = mw2g.GarthHTTPError
         try:
-            if mw2g.GarthHTTPError is None:
-                mw2g.GarthHTTPError = GarthHTTPError
-            
             result = mw2g.upload_fit_file_to_garmin(self.test_file)
             
             self.assertFalse(result)
         finally:
-            if original_error is None:
+            # Restore original if we replaced it
+            if 'original_error' in locals():
                 mw2g.GarthHTTPError = original_error
     
     def test_upload_fit_file_to_garmin_invalid_path(self):
